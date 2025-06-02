@@ -12,6 +12,7 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.common.keys import Keys
 import configparser
 import nbformat
+import glob
 from nbclient import NotebookClient
 
 # Configurações
@@ -28,9 +29,16 @@ def handle_popups(driver):
         allow_button = WebDriverWait(driver, 3).until(
             EC.element_to_be_clickable((By.ID, "allowWebNotification"))
         )
-        if allow_button.is_displayed():
-            print("Fechando popup de notificações...")
-            allow_button.click()
+        allow_button2 = WebDriverWait(driver, 3).until(
+            EC.element_to_be_clickable((By.CLASS_NAME, "toast-close-button"))
+        )
+        if allow_button.is_displayed() or allow_button2.is_displayed():
+            if allow_button.is_displayed():
+                print("Fechando popup de notificações...")
+                allow_button.click()
+            else:
+                print("Fechando popup de notificações (toast)...")
+                allow_button2.click()
             time.sleep(1)
             return True
     except:
@@ -219,7 +227,10 @@ def set_date_via_input(driver, element_id, target_date):
         # Fallback para o datepicker se necessário
         set_date_with_datepicker(driver, element_id, target_date)
 
-def fetch_eurusd_data():
+def get_new_file(before, after):
+    return list(set(after) - set(before))
+
+def fetch_eurusd_data(timeframes):
     print("Configurando navegador automatizado...")
     
     # Configurações do navegador
@@ -240,6 +251,7 @@ def fetch_eurusd_data():
         "safebrowsing.enabled": True
     }
     chrome_options.add_experimental_option("prefs", prefs)
+    downloaded_files = []
     
     driver = None
     try:
@@ -299,108 +311,82 @@ def fetch_eurusd_data():
         
         # Verificar popups na página de dados históricos
         handle_popups(driver)
-        
-        # Configurar timeframe para 4 horas
-        print("Configurando timeframe para 4H...")
-        timeframe_container = wait.until(EC.element_to_be_clickable((By.ID, "select2-timeScales-container")))
-        timeframe_container.click()
-        time.sleep(1)
-        
-        # Selecionar 4 horas
-        option_4h = wait.until(EC.element_to_be_clickable((By.XPATH, "//li[contains(., '4 hours')]")))
-        option_4h.click()
-        print("Timeframe configurado para 4H")
-        time.sleep(5)  # Mais tempo após mudança de timeframe
-        
-        # Verificar popups após selecionar timeframe
-        handle_popups(driver)
-        
-        # Configurar datas
-        # Configurar datas usando o datepicker
+
         print("Configurando datas manualmente...")
         end_date = datetime.now()
         start_date = end_date - timedelta(days=150)  # Período reduzido
-
+        
         # Configurar data de início
         set_date_via_input(driver, "startDate", start_date)
 
         # Configurar data de fim
         set_date_via_input(driver, "endDate", end_date)
         time.sleep(2)
-        
-        # Aplicar datas
-        try:
-            apply_button = wait.until(EC.element_to_be_clickable((By.ID, "historicalFilterBtn")))
-            apply_button.click()
-            print("Datas aplicadas via botão")
-        except:
-            print("Aplicando datas via JavaScript")
-            driver.execute_script("historicalFilterBtn();")
-        
-        time.sleep(15)
-        
-        print(f"Período configurado: data de início {start_date.strftime('%Y-%m-%d')} a data de fim {end_date.strftime('%Y-%m-%d')}")
-        
-        # SOLUÇÃO ALTERNATIVA PARA O BOTÃO APLICAR
-        try:
-            # Tentar pelo ID original
-            apply_button = driver.find_element(By.ID, "historicalFilterBtn")
-        except:
+
+        handle_popups(driver)
+
+        # Processar cada timeframe
+        for i, timeframe in enumerate(timeframes):
+            before = os.listdir(download_dir)
+
+            print(f"\n{'='*50}")
+            print(f"Processando timeframe: {timeframe}")
+            print(f"{'='*50}")
+            
+            # Selecionar timeframe
+            print(f"Configurando timeframe para {timeframe}...")
+            timeframe_container = wait.until(EC.element_to_be_clickable((By.ID, "select2-timeScales-container")))
+            timeframe_container.click()
+            time.sleep(1)
+            
+            # Selecionar a opção específica
+            option = wait.until(EC.element_to_be_clickable((By.XPATH, f"//li[contains(., '{timeframe}')]")))
+            option.click()
+            print(f"Timeframe configurado para {timeframe}")
+            time.sleep(5)
+            handle_popups(driver)
+            
+            # Aplicar filtro
             try:
-                # Tentar por seletor CSS
-                apply_button = driver.find_element(By.CSS_SELECTOR, "button[onclick*='historicalFilterBtn']")
+                apply_button = wait.until(EC.element_to_be_clickable((By.ID, "historicalFilterBtn")))
+                apply_button.click()
+                print("Filtro aplicado via botão")
             except:
-                try:
-                    # Tentar por texto do botão
-                    apply_button = driver.find_element(By.XPATH, "//button[contains(., 'Apply')]")
-                except:
-                    print("Botão 'Apply' não encontrado. Usando JavaScript como alternativa")
-                    # Executar diretamente a função JavaScript
-                    driver.execute_script("historicalFilterBtn();")
-                    print("Datas aplicadas via JavaScript")
-                    time.sleep(10)
-                    return None
-        
-        apply_button.click()
-        print("Datas aplicadas")
-        time.sleep(15)  # Mais tempo para carregar dados
-        
-        # Verificar popups após aplicar datas
-        handle_popups(driver)
-        
-        # Baixar CSV
-        print("Baixando dados CSV...")
-        csv_button = wait.until(EC.element_to_be_clickable((By.ID, "historicalDataCSV")))
-        csv_button.click()
-        time.sleep(15)  # Mais tempo para download
-        
-        # Verificar popups após iniciar download
-        handle_popups(driver)
-        
-        # Verificar o arquivo baixado
-        files = [f for f in os.listdir(download_dir) 
-                 if f.startswith("EURUSD_historical_data (1)") and f.endswith(".csv")]
-        
-        if files:
-            # Encontrar o arquivo mais recente
-            latest_file = max(files, key=lambda f: os.path.getctime(os.path.join(download_dir, f)))
-            csv_path = os.path.join(download_dir, latest_file)
-            final_path = os.path.join(download_dir, 'eurusd_historical_data (1).csv')
+                print("Aplicando filtro via JavaScript")
+                driver.execute_script("historicalFilterBtn();")
             
-            # Renomear e processar
-            os.rename(csv_path, final_path)
-            print(f"Arquivo CSV salvo como: {final_path}")
+            # Aguardar carregamento dos dados
+            wait.until(EC.invisibility_of_element_located((By.CLASS_NAME, "loading-spinner")))
+            time.sleep(5)
             
-            # Processar os dados
-            df = process_csv_data(final_path)
-            return df
-        else:
-            print("Não foi possível encontrar o arquivo CSV baixado.")
-            return None
+            # Baixar CSV
+            print("Baixando dados CSV...")
+            csv_button = wait.until(EC.element_to_be_clickable((By.ID, "historicalDataCSV")))
+            csv_button.click()
+            
+            # Esperar download completar
+            timeout = 120
+            while timeout > 0:
+                after = os.listdir(download_dir)
+                new_files = get_new_file(before, after)
+                if new_files:
+                    break
+                time.sleep(1)
+                timeout -= 1
+            if new_files:
+                downloaded = new_files[0]  # Se baixar mais de um, ajuste aqui
+                safe_timeframe = timeframe.replace(" ", "_").replace("/", "-")
+                new_filename = f"EURUSD_{safe_timeframe}_{datetime.now().strftime('%Y%m%d')}.csv"
+                os.rename(os.path.join(download_dir, downloaded), os.path.join(download_dir, new_filename))
+                print(f"Arquivo salvo como: {new_filename}")
+            else:
+                print(f"Falha no download para timeframe {timeframe}")
+        
+        print("\nTodos os timeframes processados com sucesso!")
+        return downloaded_files
             
     except Exception as e:
         print(f"Erro durante a execução: {str(e)}")
-        # Tirar screenshot para debug
         if driver:
             driver.save_screenshot("error_screenshot.png")
             print("Screenshot salvo como 'error_screenshot.png'")
@@ -409,6 +395,38 @@ def fetch_eurusd_data():
         if driver:
             driver.quit()
             print("Navegador fechado.")
+        
+def wait_for_download_complete(download_dir, pattern, timeout=60):
+    """
+    Aguarda até que o download seja completado
+    Retorna o path do arquivo baixado ou None se falhar
+    """
+    print("Aguardando download completar...")
+    start_time = time.time()
+    last_file = None
+    
+    while (time.time() - start_time) < timeout:
+        files = glob.glob(os.path.join(download_dir, pattern))
+        
+        if files:
+            # Encontrar o arquivo mais recente
+            newest_file = max(files, key=os.path.getctime)
+            
+            # Verificar se o tamanho está estável (download completo)
+            size1 = os.path.getsize(newest_file)
+            time.sleep(2)
+            size2 = os.path.getsize(newest_file)
+            
+            if size1 == size2 and size1 > 0:
+                print("Download completado com sucesso")
+                return newest_file
+                
+            last_file = newest_file
+        
+        time.sleep(3)
+    
+    print("Tempo limite excedido para download")
+    return last_file  # Pode retornar arquivo incompleto
 
 def process_csv_data(file_path):
     try:
@@ -509,15 +527,20 @@ def main():
     except:
         print("Erro ao ler o arquivo config.ini.")
         return
-    print("Iniciando processo de coleta de dados EUR/USD...")
-    fetch_eurusd_data()
+    print("Iniciando processo de coleta de dados EUR/USD - 4 horas, 1 hora e 5 minutos...")
+    timeframes = [
+        "4 hours",
+        "1 hour",
+        "5 minutes"
+    ]
+    fetch_eurusd_data(timeframes)
     print("Processo concluído.")
     print("Iniciando notebook de análise...")
 
     notebook_path = "MBT.ipynb"
     notebook_path_2 = "MBT Analises.ipynb"
 
-
+'''
     try:
         print(f"Executando notebook {notebook_path} ...")
         with open(notebook_path, encoding="utf-8") as f:        
@@ -538,6 +561,6 @@ def main():
         print("Execução do notebook MBT Analises.ipynb concluída com sucesso.")
     except Exception as e:
         print(f"Erro ao executar o segundo notebook: {e}")
-    print("Notebook de análise concluído.")
+    print("Notebook de análise concluído.")'''
 if __name__ == "__main__":
     main()
